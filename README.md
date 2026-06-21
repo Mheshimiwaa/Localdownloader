@@ -52,3 +52,4 @@ To resolve Spotify links, you need Spotify API keys:
 2. Click **Create app**, fill in the basic details (Redirect URI can be `http://localhost:5000`), and save.
 3. Obtain your **Client ID** and **Client Secret**.
 4. In MeloFlow, click the **Gear Icon** in the top right, enter your credentials, and click **Save & Validate Keys**. MeloFlow will verify them and establish the connection.
+# Localdownloader
