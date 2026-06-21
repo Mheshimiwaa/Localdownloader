@@ -1,0 +1,12 @@
+.env
+venv/
+__pycache__/
+*.pyc
+
+# Temp downloader files
+direct_*
+spotify_*
+*.mp3
+*.webm
+*.m4a
+*.part
