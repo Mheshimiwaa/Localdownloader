@@ -1,55 +1,91 @@
 # 🎵 MeloFlow — Premium Audio Downloader Web Application
 
-MeloFlow is a high-fidelity, responsive single-page web application built with a Flask API backend and a custom modern glassmorphic HTML/JS/CSS frontend. It replaces the basic Streamlit interface with a premium, sleek dark-themed dashboard.
+MeloFlow is a responsive single-page web application with a Flask API backend and a
+glassmorphic HTML/JS/CSS frontend. Paste a link, get an MP3.
 
 ## ✨ Features
 
-- **Direct Media Downloader**: Paste YouTube, SoundCloud, or direct video/audio URLs to extract and download high-quality MP3 streams.
-- **Spotify Track Extractor**: Paste Spotify song links. MeloFlow fetches metadata automatically via the Spotify Web API, performs a matching audio search, compiles the stream, and serves the MP3.
-- **Sleek Settings Panel**: Integrated credentials setup to save and test Spotify API credentials directly from the UI into your local configuration.
-- **Modern Glassmorphic Design**: Curated color palette (Spotify Green gradients, deep space purples, neon cyans) utilizing Google Fonts, smooth backdrop filters, breathing hover animations, and an interactive pure-CSS pulsing sound wave compilation progress bar.
-- **Clipboard Integration**: Seamless "Paste" buttons that automatically pull URLs from the system clipboard to the search fields with one click.
-- **Streamlined Downloader**: Direct download triggers that start downloading file streams automatically without redirects or page reloads.
+- **Direct Media Downloader**: Paste YouTube, SoundCloud, or direct audio/video URLs to extract and download MP3 audio.
+- **Spotify Track Extractor**: Paste a Spotify link. MeloFlow reads the metadata via the Spotify Web API, finds a matching audio stream, and serves the MP3.
+- **Sleek Settings Panel**: Save and validate Spotify API credentials from the UI.
+- **Modern Glassmorphic Design**: Spotify-green/deep-purple palette, backdrop filters, and a pure-CSS pulsing progress bar.
+- **Clipboard Integration**: One-click paste buttons.
 
 ## 📁 Project Structure
 
 ```text
-SPOTIFY/
-├── server.py              # Flask API Web Server & Downloader engine
-├── app.py                 # (Legacy) Streamlit python script
-├── .env                   # Configuration file (stores Spotify Client keys)
-├── venv/                  # Python virtual environment directory
-├── static/                # Frontend web application static files
-│   ├── index.html         # Main dashboard layout & semantic tags
-│   ├── css/
-│   │   └── styles.css     # Glassmorphic UI stylesheet & animations
-│   └── js/
-│       └── app.js         # Client-side API fetch, clipboard, & download hooks
-└── README.md              # Project documentation
+Localdownloader/
+├── server.py              # Flask API server & downloader engine
+├── app.py                 # (Legacy) Streamlit script, unused
+├── Dockerfile             # Container image for local use / other hosts
+├── Dockerfile.vercel      # Same image, auto-detected by Vercel
+├── .dockerignore
+├── requirements.txt
+├── static/                # Frontend
+│   ├── index.html
+│   ├── css/styles.css
+│   └── js/app.js
+└── README.md
 ```
 
-## 🚀 Running the Web App
+## 🚀 Running Locally
 
-1. Make sure you are in the project folder:
-   ```bash
-   cd ~/Desktop/SPOTIFY
-   ```
+```bash
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+./venv/bin/python server.py
+```
 
-2. Run the Flask backend server:
-   ```bash
-   ./venv/bin/python server.py
-   ```
+Then open <http://localhost:5000>. `ffmpeg` must be on your `PATH` for MP3
+extraction to work (`brew install ffmpeg` / `apt install ffmpeg`).
 
-3. Open your browser and navigate to:
-   ```text
-   http://localhost:5000
-   ```
+### Docker
+
+```bash
+docker build -t meloflow .
+docker run -p 5000:5000 meloflow
+```
 
 ## 🟢 Spotify API Configuration
 
-To resolve Spotify links, you need Spotify API keys:
-1. Visit the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and log in.
-2. Click **Create app**, fill in the basic details (Redirect URI can be `http://localhost:5000`), and save.
-3. Obtain your **Client ID** and **Client Secret**.
-4. In MeloFlow, click the **Gear Icon** in the top right, enter your credentials, and click **Save & Validate Keys**. MeloFlow will verify them and establish the connection.
-# Localdownloader
+1. Create an app at the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
+2. Grab the **Client ID** and **Client Secret**.
+3. In MeloFlow, click the gear icon, paste them, and hit **Save & Validate Keys**.
+
+On hosted deployments `PRODUCTION=true` locks this panel — set the credentials as
+environment variables instead:
+
+```bash
+docker run -e PRODUCTION=true -e SPOTIPY_CLIENT_ID=... -e SPOTIPY_CLIENT_SECRET=... -p 5000:5000 meloflow
+```
+
+## ▲ Deploying to Vercel
+
+Vercel builds `Dockerfile.vercel` and runs it as a container function, which is what
+you want here because yt-dlp needs an `ffmpeg` binary that Vercel's native runtimes
+don't provide.
+
+1. Push the repo to GitHub.
+2. At [vercel.com/new](https://vercel.com/new), import **Mheshimiwaa/Localdownloader**.
+3. Accept the detected framework preset. Vercel finds `Dockerfile.vercel` at the
+   repo root and handles the rest — no build command or output directory needed.
+4. Add `SPOTIPY_CLIENT_ID` and `SPOTIPY_CLIENT_SECRET` under **Settings → Environment Variables**.
+5. Deploy. Every push to the default branch redeploys.
+
+To keep it private, enable **Settings → Deployment Protection → Vercel Authentication**.
+Only accounts you invite can reach it, and it's included on the Hobby plan.
+
+Test the same build locally first with `vercel dev` (needs Docker running).
+
+## ⚠️ Known Limitations
+
+**YouTube blocks datacenter IPs.** yt-dlp resolves YouTube metadata fine from a
+server, but the media CDN returns `403 Forbidden` for requests from cloud IPs. A
+Vercel deployment will hit this, as will most hosts. Direct audio/video URLs
+(SoundCloud, direct MP3s, etc.) are unaffected. Self-hosting from a home
+connection works. Working around the YouTube side needs PO-token support
+(`bgutil-ytdlp-pot-provider`), which is a moving target.
+
+**Response size.** MP3s are streamed in chunks so no buffering limit applies, but
+on serverless hosts the scratch filesystem is capped at 500 MB. Downloads are
+cleaned up as soon as the client disconnects.

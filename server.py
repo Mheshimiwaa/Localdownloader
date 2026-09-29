@@ -1,11 +1,14 @@
 import os
-import io
+import shutil
+import tempfile
 import uuid
-import glob
-from flask import Flask, request, jsonify, send_file, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
+from werkzeug.http import dump_options_header
 import yt_dlp
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
+
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 
 # Custom .env loader
 def load_dotenv():
@@ -20,7 +23,44 @@ def load_dotenv():
 # Load env variables initially
 load_dotenv()
 
-app = Flask(__name__, static_folder='static')
+app = Flask(__name__, static_folder=STATIC_DIR)
+
+# spotipy caches its API token in ./.cache by default, which fails on hosts with a
+# read-only filesystem (Vercel). Point it at the scratch dir so it stays writable.
+def get_cache_handler():
+    cache_path = os.path.join(tempfile.gettempdir(), 'meloflow_spotipy.cache')
+    return spotipy.cache_handler.CacheFileHandler(cache_path)
+
+# yt-dlp needs somewhere to write intermediates before they are streamed back.
+# A per-request dir keeps concurrent requests from colliding and is always wiped.
+def make_work_dir():
+    return tempfile.mkdtemp(prefix='meloflow_')
+
+# Stream the finished MP3 and delete the work dir once the body is done.
+# This is hand-rolled rather than send_file() because send_file sets
+# direct_passthrough, and Werkzeug then hands the raw file object to the WSGI
+# server without wrapping it in a ClosingIterator - so call_on_close callbacks
+# never run and the file is orphaned. Yielding chunks lets the generator's
+# finally block do the cleanup when the server closes the iterator. Leaving
+# Content-Length off also keeps this a chunked response rather than a buffered
+# one, which is what some serverless hosts need to stream large payloads.
+def stream_mp3(mp3_filepath, download_name, work_dir):
+    def generate():
+        try:
+            with open(mp3_filepath, 'rb') as f:
+                while True:
+                    chunk = f.read(64 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    headers = {
+        'Content-Disposition': dump_options_header('attachment', {'filename': download_name}),
+        'Cache-Control': 'no-store'
+    }
+    return Response(generate(), mimetype='audio/mp3', headers=headers)
 
 def get_spotify_client():
     client_id = os.environ.get('SPOTIPY_CLIENT_ID')
@@ -30,7 +70,8 @@ def get_spotify_client():
     try:
         auth_manager = SpotifyClientCredentials(
             client_id=client_id,
-            client_secret=client_secret
+            client_secret=client_secret,
+            cache_handler=get_cache_handler()
         )
         return spotipy.Spotify(client_credentials_manager=auth_manager)
     except Exception:
@@ -39,12 +80,12 @@ def get_spotify_client():
 # Serve HTML frontend
 @app.route('/')
 def index():
-    return send_from_directory('static', 'index.html')
+    return send_from_directory(STATIC_DIR, 'index.html')
 
 # Serve static files (CSS, JS, assets)
 @app.route('/<path:path>')
 def serve_static(path):
-    return send_from_directory('static', path)
+    return send_from_directory(STATIC_DIR, path)
 
 # Get current configuration status
 @app.route('/api/status', methods=['GET'])
@@ -87,7 +128,8 @@ def save_settings():
         # Test credentials
         auth_manager = SpotifyClientCredentials(
             client_id=client_id,
-            client_secret=client_secret
+            client_secret=client_secret,
+            cache_handler=get_cache_handler()
         )
         sp = spotipy.Spotify(client_credentials_manager=auth_manager)
         # Perform a tiny query to verify
@@ -109,8 +151,9 @@ def download_direct():
         return jsonify({'error': 'URL is required.'}), 400
     
     unique_id = str(uuid.uuid4())
-    output_filename = f"direct_{unique_id}"
-    mp3_filepath = f"{output_filename}.mp3"
+    work_dir = make_work_dir()
+    output_stem = os.path.join(work_dir, f"direct_{unique_id}")
+    mp3_filepath = f"{output_stem}.mp3"
     
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -119,7 +162,7 @@ def download_direct():
             'preferredcodec': 'mp3',
             'preferredquality': '192',
         }],
-        'outtmpl': f'{output_filename}.%(ext)s',
+        'outtmpl': f'{output_stem}.%(ext)s',
         'quiet': True,
         'no_warnings': True
     }
@@ -133,29 +176,14 @@ def download_direct():
         # Clean title for safe filename
         clean_title = "".join([c if c.isalnum() or c in " .-_()" else "_" for c in title])
         
-        if os.path.exists(mp3_filepath):
-            with open(mp3_filepath, 'rb') as f:
-                file_data = io.BytesIO(f.read())
-            os.remove(mp3_filepath)
-            
-            return send_file(
-                file_data,
-                mimetype='audio/mp3',
-                as_attachment=True,
-                download_name=f"{clean_title}.mp3"
-            )
-        else:
+        if not os.path.exists(mp3_filepath):
+            shutil.rmtree(work_dir, ignore_errors=True)
             return jsonify({'error': 'Failed to generate MP3 file.'}), 500
+
+        return stream_mp3(mp3_filepath, f"{clean_title}.mp3", work_dir)
             
     except Exception as e:
-        # Cleanup
-        if os.path.exists(mp3_filepath):
-            os.remove(mp3_filepath)
-        for temp_file in glob.glob(f"{output_filename}.*"):
-            try:
-                os.remove(temp_file)
-            except Exception:
-                pass
+        shutil.rmtree(work_dir, ignore_errors=True)
         return jsonify({'error': f'Extraction failed: {str(e)}'}), 500
 
 # Spotify Downloader Endpoint
@@ -172,8 +200,9 @@ def download_spotify():
         return jsonify({'error': 'Spotify API credentials are not configured or invalid.'}), 400
         
     unique_id = str(uuid.uuid4())
-    output_filename = f"spotify_{unique_id}"
-    mp3_filepath = f"{output_filename}.mp3"
+    work_dir = make_work_dir()
+    output_stem = os.path.join(work_dir, f"spotify_{unique_id}")
+    mp3_filepath = f"{output_stem}.mp3"
     
     try:
         # Fetch metadata
@@ -190,7 +219,7 @@ def download_spotify():
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'outtmpl': f'{output_filename}.%(ext)s',
+            'outtmpl': f'{output_stem}.%(ext)s',
             'quiet': True,
             'no_warnings': True
         }
@@ -201,31 +230,18 @@ def download_spotify():
         clean_filename = f"{artist_name} - {song_name}.mp3"
         clean_filename = "".join([c if c.isalnum() or c in " .-_()" else "_" for c in clean_filename])
         
-        if os.path.exists(mp3_filepath):
-            with open(mp3_filepath, 'rb') as f:
-                file_data = io.BytesIO(f.read())
-            os.remove(mp3_filepath)
-            
-            return send_file(
-                file_data,
-                mimetype='audio/mp3',
-                as_attachment=True,
-                download_name=clean_filename
-            )
-        else:
+        if not os.path.exists(mp3_filepath):
+            shutil.rmtree(work_dir, ignore_errors=True)
             return jsonify({'error': 'Failed to generate MP3 file.'}), 500
+
+        return stream_mp3(mp3_filepath, clean_filename, work_dir)
             
     except Exception as e:
-        # Cleanup
-        if os.path.exists(mp3_filepath):
-            os.remove(mp3_filepath)
-        for temp_file in glob.glob(f"{output_filename}.*"):
-            try:
-                os.remove(temp_file)
-            except Exception:
-                pass
+        shutil.rmtree(work_dir, ignore_errors=True)
         return jsonify({'error': f'Spotify track extraction failed: {str(e)}'}), 500
 
 if __name__ == '__main__':
-    # Streamlit runs on 8501, let's run Flask on 5000 (default)
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Dev server only. Container/prod runs go through gunicorn (see Dockerfile).
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('PRODUCTION', 'false').lower() != 'true'
+    app.run(host='0.0.0.0', port=port, debug=debug)

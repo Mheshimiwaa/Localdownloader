@@ -1,3 +1,6 @@
+# Vercel auto-detects this filename, builds the image, and runs it as a
+# container function. It is intentionally identical to ./Dockerfile - keep the
+# two in sync when changing dependencies or the start command.
 FROM python:3.11-slim
 
 # Install system dependencies (ffmpeg is required by yt-dlp to extract MP3 audio)
