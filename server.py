@@ -155,6 +155,8 @@ def download_direct():
     output_stem = os.path.join(work_dir, f"direct_{unique_id}")
     mp3_filepath = f"{output_stem}.mp3"
     
+    cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cookies.txt')
+
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
@@ -164,7 +166,8 @@ def download_direct():
         }],
         'outtmpl': f'{output_stem}.%(ext)s',
         'quiet': True,
-        'no_warnings': True
+        'no_warnings': True,
+        **(({'cookiefile': cookies_path}) if os.path.exists(cookies_path) else {})
     }
     
     try:
@@ -212,6 +215,8 @@ def download_spotify():
         
         search_query = f"ytsearch1:{artist_name} {song_name} audio"
         
+        cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cookies.txt')
+
         ydl_opts = {
             'format': 'bestaudio/best',
             'postprocessors': [{
@@ -221,7 +226,8 @@ def download_spotify():
             }],
             'outtmpl': f'{output_stem}.%(ext)s',
             'quiet': True,
-            'no_warnings': True
+            'no_warnings': True,
+            **(({'cookiefile': cookies_path}) if os.path.exists(cookies_path) else {})
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

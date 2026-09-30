@@ -14,3 +14,7 @@ spotify_*
 *.webm
 *.m4a
 *.part
+
+# YouTube cookies — contain session tokens, never commit
+cookies.txt
+www.youtube.com_cookies.txt
