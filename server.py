@@ -25,6 +25,40 @@ load_dotenv()
 
 app = Flask(__name__, static_folder=STATIC_DIR)
 
+# If YOUTUBE_COOKIES env var is set (base64-encoded cookies file contents),
+# write it to a temp file so yt-dlp can use it. This lets Vercel deployments
+# authenticate with YouTube without committing cookies to the repo.
+_COOKIES_TEMP_PATH = None
+
+def _init_cookies():
+    global _COOKIES_TEMP_PATH
+    cookies_env = os.environ.get('YOUTUBE_COOKIES', '').strip()
+    if cookies_env:
+        import base64
+        try:
+            decoded = base64.b64decode(cookies_env).decode('utf-8')
+        except Exception:
+            # Not base64 — treat as raw text (local .env usage)
+            decoded = cookies_env
+        tmp = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.txt', prefix='yt_cookies_', delete=False
+        )
+        tmp.write(decoded)
+        tmp.close()
+        _COOKIES_TEMP_PATH = tmp.name
+        return
+
+    # Fall back to cookies.txt in the project directory (local/Docker)
+    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cookies.txt')
+    if os.path.exists(local):
+        _COOKIES_TEMP_PATH = local
+
+_init_cookies()
+
+def get_cookies_path():
+    """Return the cookies file path if available, else None."""
+    return _COOKIES_TEMP_PATH if _COOKIES_TEMP_PATH and os.path.exists(_COOKIES_TEMP_PATH) else None
+
 # spotipy caches its API token in ./.cache by default, which fails on hosts with a
 # read-only filesystem (Vercel). Point it at the scratch dir so it stays writable.
 def get_cache_handler():
@@ -155,7 +189,7 @@ def download_direct():
     output_stem = os.path.join(work_dir, f"direct_{unique_id}")
     mp3_filepath = f"{output_stem}.mp3"
     
-    cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cookies.txt')
+    cookies_path = get_cookies_path()
 
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -167,7 +201,7 @@ def download_direct():
         'outtmpl': f'{output_stem}.%(ext)s',
         'quiet': True,
         'no_warnings': True,
-        **(({'cookiefile': cookies_path}) if os.path.exists(cookies_path) else {})
+        **(({'cookiefile': cookies_path}) if cookies_path else {})
     }
     
     try:
@@ -215,7 +249,7 @@ def download_spotify():
         
         search_query = f"ytsearch1:{artist_name} {song_name} audio"
         
-        cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cookies.txt')
+        cookies_path = get_cookies_path()
 
         ydl_opts = {
             'format': 'bestaudio/best',
@@ -227,7 +261,7 @@ def download_spotify():
             'outtmpl': f'{output_stem}.%(ext)s',
             'quiet': True,
             'no_warnings': True,
-            **(({'cookiefile': cookies_path}) if os.path.exists(cookies_path) else {})
+            **(({'cookiefile': cookies_path}) if cookies_path else {})
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
